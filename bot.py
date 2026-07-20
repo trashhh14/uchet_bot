@@ -616,7 +616,7 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, remember_video))
     app.add_handler(MessageReactionHandler(process_reaction))
     app.job_queue.run_daily(scheduled_report, time=time(hour=9, tzinfo=TIMEZONE))
-    app.run_polling(allowed_updates=["message", "message_reaction"])
+    app.run_polling(allowed_updates=["message", "message_reaction", "callback_query"])
 
 
 if __name__ == "__main__":
