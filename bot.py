@@ -14,9 +14,10 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -56,6 +57,9 @@ target_chat_id = TARGET_CHAT_ID
 STATS_BUTTON = "📊 Статс"
 STATS_KEYBOARD = ReplyKeyboardMarkup(
     [[STATS_BUTTON]], resize_keyboard=True, is_persistent=True
+)
+BACK_TO_MENU = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("⬅️ Назад", callback_data="main_menu")]]
 )
 
 logging.basicConfig(
@@ -545,7 +549,7 @@ async def show_stats_in_chat(update: Update, month: str) -> None:
                 stats_text(month, rows),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
-                reply_markup=STATS_KEYBOARD,
+                reply_markup=BACK_TO_MENU,
             )
     except Exception:
         logger.exception("Не удалось показать статистику за %s", month)
@@ -579,6 +583,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Replace the stats message with the compact main menu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if query.from_user.id != APPROVER_USER_ID or query.data != "main_menu":
+        return
+    await query.edit_message_text(
+        "Главное меню. Нажми «📊 Статс» внизу, чтобы снова открыть статистику."
+    )
+
+
 def main() -> None:
     if not os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") and not GOOGLE_SERVICE_ACCOUNT_FILE.exists():
         raise FileNotFoundError(f"Не найден Google key: {GOOGLE_SERVICE_ACCOUNT_FILE}")
@@ -593,6 +610,7 @@ def main() -> None:
     app.add_handler(CommandHandler("report", report_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(STATS_BUTTON)}$"), stats_button))
+    app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^main_menu$"))
     # Some Telegram clients send an MP4 as an animation or a generic document.
     # Catch all messages, then filter media types precisely in is_video_message.
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, remember_video))
