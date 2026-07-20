@@ -472,28 +472,47 @@ async def settopic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("Готово. Теперь считаю ролики только в этом топике.")
 
 
-async def send_monthly_report(month: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        if conn.execute("SELECT 1 FROM sent_reports WHERE month = ?", (month,)).fetchone():
-            return
+def stats_text(month: str, rows: list[list[str]]) -> str:
+    """Format the monthly table as clickable Telegram usernames."""
+    body = []
+    for row in rows:
+        if not row or not normalized_username(row[0]):
+            continue
+        try:
+            uz = int(row[1]) if len(row) > 1 and row[1] else 0
+            rp = int(row[2]) if len(row) > 2 and row[2] else 0
+            total = int(row[3]) if len(row) > 3 and row[3] else uz + rp
+        except ValueError:
+            continue  # Header row or an invalid manual value.
+        username = normalized_username(row[0])
+        body.append(
+            f'<a href="https://t.me/{username}">@{username}</a> — {total} '
+            f"(УЗ: {uz}, РП: {rp})"
+        )
+    return f"Статистика за {month}:\n" + ("\n".join(body) if body else "Нет данных.")
+
+
+async def send_monthly_report(
+    month: str, context: ContextTypes.DEFAULT_TYPE, mark_as_sent: bool = True
+) -> None:
+    if mark_as_sent:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
+            if conn.execute("SELECT 1 FROM sent_reports WHERE month = ?", (month,)).fetchone():
+                return
     try:
         rows = await asyncio.to_thread(get_month_rows, month)
-        body = []
-        for row in rows:
-            if not row or not normalized_username(row[0]):
-                continue
-            try:
-                uz = int(row[1]) if len(row) > 1 and row[1] else 0
-                rp = int(row[2]) if len(row) > 2 and row[2] else 0
-            except ValueError:
-                continue  # Allows a header row.
-            body.append(f"@{normalized_username(row[0])}: УЗ — {uz}, РП — {rp}, всего — {uz + rp}")
-        text = f"Отчёт за {month}:\n" + ("\n".join(body) if body else "Нет данных.")
+        text = stats_text(month, rows)
         text += f"\n\nТаблица: https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
-        await context.bot.send_message(chat_id=APPROVER_USER_ID, text=text)
-        with closing(sqlite3.connect(DB_PATH)) as conn:
-            conn.execute("INSERT INTO sent_reports(month) VALUES (?)", (month,))
-            conn.commit()
+        await context.bot.send_message(
+            chat_id=APPROVER_USER_ID,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        if mark_as_sent:
+            with closing(sqlite3.connect(DB_PATH)) as conn:
+                conn.execute("INSERT INTO sent_reports(month) VALUES (?)", (month,))
+                conn.commit()
     except Exception:
         logger.exception("Не удалось отправить отчёт за %s", month)
 
@@ -510,7 +529,26 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not update.effective_user or update.effective_user.id != APPROVER_USER_ID:
         return
     month = context.args[0] if context.args else datetime.now(TIMEZONE).strftime("%Y-%m")
-    await send_monthly_report(month, context)
+    await send_monthly_report(month, context, mark_as_sent=False)
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current monthly results directly in the Telegram chat."""
+    if not update.effective_user or update.effective_user.id != APPROVER_USER_ID:
+        return
+    month = context.args[0] if context.args else datetime.now(TIMEZONE).strftime("%Y-%m")
+    try:
+        rows = await asyncio.to_thread(get_month_rows, month)
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                stats_text(month, rows),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+    except Exception:
+        logger.exception("Не удалось показать статистику за %s", month)
+        if update.effective_message:
+            await update.effective_message.reply_text("Не смог получить статистику. Проверь логи бота.")
 
 
 def main() -> None:
@@ -524,6 +562,7 @@ def main() -> None:
     app.add_handler(CommandHandler("topicid", topicid))
     app.add_handler(CommandHandler("settopic", settopic))
     app.add_handler(CommandHandler("report", report_command))
+    app.add_handler(CommandHandler("stats", stats_command))
     # Some Telegram clients send an MP4 as an animation or a generic document.
     # Catch all messages, then filter media types precisely in is_video_message.
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, remember_video))
