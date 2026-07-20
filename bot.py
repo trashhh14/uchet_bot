@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from telegram import Update
+from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -53,6 +53,10 @@ album_buffers: dict[tuple[int, str], list[tuple[int, str, list[str], str]]] = {}
 album_tasks: dict[tuple[int, str], asyncio.Task] = {}
 target_thread_id = TARGET_THREAD_ID
 target_chat_id = TARGET_CHAT_ID
+STATS_BUTTON = "📊 Статс"
+STATS_KEYBOARD = ReplyKeyboardMarkup(
+    [[STATS_BUTTON]], resize_keyboard=True, is_persistent=True
+)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -532,11 +536,8 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await send_monthly_report(month, context, mark_as_sent=False)
 
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show current monthly results directly in the Telegram chat."""
-    if not update.effective_user or update.effective_user.id != APPROVER_USER_ID:
-        return
-    month = context.args[0] if context.args else datetime.now(TIMEZONE).strftime("%Y-%m")
+async def show_stats_in_chat(update: Update, month: str) -> None:
+    """Reply with the requested month and keep the stats button visible."""
     try:
         rows = await asyncio.to_thread(get_month_rows, month)
         if update.effective_message:
@@ -544,11 +545,38 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 stats_text(month, rows),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_markup=STATS_KEYBOARD,
             )
     except Exception:
         logger.exception("Не удалось показать статистику за %s", month)
         if update.effective_message:
             await update.effective_message.reply_text("Не смог получить статистику. Проверь логи бота.")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current monthly results directly in the Telegram chat."""
+    if not update.effective_user or update.effective_user.id != APPROVER_USER_ID:
+        return
+    month = context.args[0] if context.args else datetime.now(TIMEZONE).strftime("%Y-%m")
+    await show_stats_in_chat(update, month)
+
+
+async def stats_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the persistent 'Статс' reply-keyboard button."""
+    if not update.effective_user or update.effective_user.id != APPROVER_USER_ID:
+        return
+    await show_stats_in_chat(update, datetime.now(TIMEZONE).strftime("%Y-%m"))
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the private control keyboard to the owner."""
+    if not update.effective_user or update.effective_user.id != APPROVER_USER_ID:
+        return
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "Готово. Нажимай кнопку ниже, чтобы посмотреть текущую статистику.",
+            reply_markup=STATS_KEYBOARD,
+        )
 
 
 def main() -> None:
@@ -558,11 +586,13 @@ def main() -> None:
     init_db()
     load_topic_scope()
     app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("topicid", topicid))
     app.add_handler(CommandHandler("settopic", settopic))
     app.add_handler(CommandHandler("report", report_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(MessageHandler(filters.Regex(f"^{re.escape(STATS_BUTTON)}$"), stats_button))
     # Some Telegram clients send an MP4 as an animation or a generic document.
     # Catch all messages, then filter media types precisely in is_video_message.
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, remember_video))
