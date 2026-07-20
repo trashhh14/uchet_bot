@@ -1,0 +1,7 @@
+.env
+google-service-account.json
+counter.sqlite3
+bot.log
+bot-error.log
+__pycache__/
+.venv/
